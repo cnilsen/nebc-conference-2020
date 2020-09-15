@@ -1,0 +1,402 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+#setup 
+```{r}
+library(tidyverse)
+library(bigrquery)
+
+
+hruNames <- read_csv("hrus.csv", 
+    col_names = TRUE)
+
+
+```
+
+
+```{r}
+queryQuants <- function(grid,hru) {
+  
+  sql_stmt <- paste0("
+  select
+      grid, year, '",hru,"' as hru, #q_75,
+q_90,
+q_95,
+q_98,
+q_99,
+q_995,
+ q_999
+  FROM (
+    SELECT
+      grid, year,
+    #PERCENTILE_DISC(",hru,",0.75) OVER (PARTITION BY grid, year) AS q_75,
+    PERCENTILE_DISC(",hru,",0.90) OVER (PARTITION BY grid, year) AS q_90,
+    PERCENTILE_DISC(",hru,",0.95) OVER (PARTITION BY grid, year) AS q_95,
+    PERCENTILE_DISC(",hru,",0.98) OVER (PARTITION BY grid, year) AS q_98,
+    PERCENTILE_DISC(",hru,",0.99) OVER (PARTITION BY grid, year) AS q_99, 
+    PERCENTILE_DISC(",hru,",0.995) OVER (PARTITION BY grid, year) AS q_995, 
+    PERCENTILE_DISC(",hru,",0.999) OVER (PARTITION BY grid, year) AS q_999, 
+       
+    FROM
+      hydrology.gfdl_surfaceQ_grid)
+  where grid = '",grid,"' 
+  GROUP BY
+    grid, year, hru, 
+q_90,
+q_95,
+q_98,
+q_99, 
+q_995,
+ q_999")
+  
+  
+  billing <- "tnc-data-v1"
+  
+  tb <- bq_project_query(billing, sql_stmt)
+  
+  df.quants <- bq_table_download(tb, max_results = Inf)
+  return(df.quants)
+  
+}
+
+
+```
+
+#Till Soil, Issaquah
+
+```{r}
+ggthemr("fresh","scientific")
+#plot Q99 for each year 
+#
+#issaquah
+
+hru251 = queryQuants("ID18_V8","hru251")
+hru250 = queryQuants("ID18_V8","hru250")
+hru252 = queryQuants("ID18_V8","hru252")
+
+#Till
+hru101 = queryQuants("ID18_V8","hru101")  
+hru111 = queryQuants("ID18_V8","hru111")  
+hru121 = queryQuants("ID18_V8","hru121")  
+
+#Till Mod
+issaquah.quants <- rbind(hru251,hru101,hru111,hru121) %>%
+  pivot_longer(-c(grid,year, hru), names_to="Quant", values_to="discharge")%>%
+  merge(hruNames,by.x="hru",by.y = "name") %>% 
+  mutate( Quant_rc = car::Recode(Quant, "'q_75' = '75% q'; 'q_90' = '90% q'; 'q_95' = '95% q'; 'q_98' = '98% q'; 'q_99' = '99% q'; 'q_995' = '99.5% q';'q_999' = '99.9% q' "))
+
+
+
+
+ggplot((issaquah.quants),aes(x=year,y=discharge,group=hru,color=Landuse))+geom_smooth(se=F)+ggtitle("Simulated Flow Percentiles, Issaquah, WA",subtitle = "Till Soil, Moderate Slope")+facet_wrap(~Quant_rc, scales = "free_y")
+
+
+
+```
+
+```{r}
+
+ggplot(filter(issaquah.quants,Quant == "q_99" ),aes(x=year,y=discharge))+geom_point(aes(color=Landuse),alpha=0.5)+geom_smooth()+ggtitle("99th Flow Percentile, Issaquah, WA",subtitle = "Till, Moderate Slope")+ylab("discharge (mm/hr)")+facet_wrap(~Landuse,scales="free_y")
+
+```
+```{r}
+ggthemr("fresh","plain")
+ggplot(filter(issaquah.quants, Quant != "q_98" & Quant != "q_995"),aes(x=year,y=discharge,color=Landuse))+geom_smooth()+ggtitle("Flow Percentiles, Issaquah, WA",subtitle = "Impervious Moderate Slope")+ylab("discharge (mm/hr)")+facet_grid(Landuse~Quant_rc,scale="free_y")+scale_y_log10()+theme(legend.position = "none")
+```
+
+#Sequim 
+
+
+```{r}
+
+sequim.hru251 = queryQuants("ID11_V13","hru251")
+sequim.hru101 = queryQuants("ID11_V13","hru101")  
+sequim.hru111 = queryQuants("ID11_V13","hru111")  
+sequim.hru121 = queryQuants("ID11_V13","hru121")  
+
+#Till Mod
+sequim.df.quants <- rbind(sequim.hru251,sequim.hru101,sequim.hru111,sequim.hru121) %>%
+  pivot_longer(-c(grid,year, hru), names_to="Quant", values_to="discharge")%>%
+  merge(hruNames,by.x="hru",by.y = "name") %>% 
+  mutate( Quant_rc = car::Recode(Quant, "'q_75' = '75% q'; 'q_90' = '90% q'; 'q_95' = '95% q'; 'q_98' = '98% q'; 'q_99' = '99% q'; 'q_999' = '99.9% q' "))
+
+
+save(sequim.df.quants,df.quants,file = "dfQuants.RData")
+
+ggplot(filter(sequim.df.quants,Quant== "q99"),aes(x=year,y=discharge,color=year))+geom_point()+geom_smooth()
+
+
+ggplot((sequim.df.quants),aes(x=year,y=discharge,group=hru),color="darkgreen")+geom_smooth(se=F)+ggtitle("Simulated Flow Percentiles, Sequim, WA",subtitle = "Till Soil, Moderate Slope")+facet_wrap(~Quant_rc, scales = "free_y")
+
+
+```
+
+# query all grids 
+```{r}
+queryQuants.all <- function(hru) {
+  
+  sql_stmt <- paste0("
+  select
+      grid, year, '",hru,"' as hru, q_75,
+q_90,
+q_95,
+q_98,
+q_99, 
+ q_999
+  FROM (
+    SELECT
+      grid, year,
+    PERCENTILE_DISC(",hru,",0.75) OVER (PARTITION BY grid, year) AS q_75,
+    PERCENTILE_DISC(",hru,",0.90) OVER (PARTITION BY grid, year) AS q_90,
+    PERCENTILE_DISC(",hru,",0.95) OVER (PARTITION BY grid, year) AS q_95,
+    PERCENTILE_DISC(",hru,",0.98) OVER (PARTITION BY grid, year) AS q_98,
+    PERCENTILE_DISC(",hru,",0.99) OVER (PARTITION BY grid, year) AS q_99, 
+    PERCENTILE_DISC(",hru,",0.999) OVER (PARTITION BY grid, year) AS q_999, 
+       
+    FROM
+      hydrology.gfdl_surfaceQ_grid)
+  
+  GROUP BY
+    grid, year, hru, q_75,
+q_90,
+q_95,
+q_98,
+q_99, 
+ q_999")
+  
+  
+  billing <- "tnc-data-v1"
+  
+  tb <- bq_project_query(billing, sql_stmt)
+  
+  df.quants <- bq_table_download(tb, max_results = Inf)
+  return(df.quants)
+  
+}
+  
+all.q <- queryQuants.all('hru250')  
+```
+```{r}
+
+
+hru250.allquants <- rbind(all.q)  %>%
+  pivot_longer(-c(grid,year, hru), names_to="Quant", values_to="discharge")%>%
+  merge(hruNames,by.x="hru",by.y = "name") %>% 
+  mutate( Quant_rc = car::Recode(Quant, " 'q_90' = '90% q'; 'q_95' = '95% q'; 'q_98' = '98% q'; 'q_99' = '99% q'; 'q_995' = '99.5% q'; 'q_999' = '99.9% q' "))
+
+
+##get just lowlands 
+cityGrid <- function(fname, df) {
+   cityGrids <- read_csv(fname)
+  cityGrids$grid <- paste0("ID", cityGrids$id)
+  return(df[which(df$grid %in% cityGrids$grid),])
+ 
+ }
+ 
+ hru250.allquants.urban <- cityGrid("grids_with_cityName.csv", hru250.allquants)
+
+ggplot((hru250.allquants.urban),aes(x=year,y=discharge,group=grid),color="azure3",size=0.5)+geom_smooth(se=F,color="azure3",size=0.5)+ggtitle("Simulated Flow Percentiles, Sequim, WA",subtitle = "Till Soil, Moderate Slope")+facet_wrap(~Quant_rc, scales = "free_y")+geom_smooth(data = filter(hru250.allquants.urban, grid == "ID18_V8"  ),aes(x=year,y=discharge), se=F,color="black",size=0.5)
+
+```
+
+
+#Saturated Soil, Issaquah 
+```{r}
+
+issaquah.hru201 = queryQuants("ID18_V8","hru201") 
+issaquah.hru211 = queryQuants("ID18_V8","hru211") 
+issaquah.hru221 = queryQuants("ID18_V8","hru221") 
+issaquah.hru251 = queryQuants("ID18_V8","hru251") 
+
+
+
+
+issaquah.quants.sat <- rbind(issaquah.hru201,issaquah.hru211,issaquah.hru221, issaquah.hru251
+                             ) %>%
+  pivot_longer(-c(grid,year, hru), names_to="Quant", values_to="discharge")%>%
+  merge(hruNames,by.x="hru",by.y = "name") %>% 
+  mutate( Quant_rc = car::Recode(Quant, " 'q_90' = '90% q'; 'q_95' = '95% q'; 'q_98' = '98% q'; 'q_99' = '99% q'; 'q_995' = '99.5% q'; 'q_999' = '99.9% q' "))
+
+ggplot((issaquah.quants.sat),aes(x=year,y=discharge,color=Landuse))+geom_smooth(se=F)+ggtitle("Simulated Flow Percentiles, Issaquah, WA",subtitle = "Saturated Soil, Moderate Slope")+facet_wrap(~Quant_rc, scales = "free_y")
+
+
+```
+
+```{r}
+
+ggplot(filter(issaquah.quants.sat,Quant == "q_999" ),aes(x=year,y=discharge))+geom_point(aes(color=Landuse),alpha=0.5)+geom_smooth()+ggtitle("99.9th Flow Percentile, Issaquah, WA",subtitle = "Till, Moderate Slope")+ylab("discharge (mm/hr)")+facet_wrap(~Landuse,scales="free_y")
+
+```
+
+#Till Soil, Issaquah 
+```{r}
+
+issaquah.hru001 = queryQuants("ID18_V8","hru001") 
+issaquah.hru011 = queryQuants("ID18_V8","hru011") 
+issaquah.hru021 = queryQuants("ID18_V8","hru021") 
+issaquah.hru251 = queryQuants("ID18_V8","hru251") 
+
+
+
+
+issaquah.quants.till <- rbind(
+  issaquah.hru001,
+  issaquah.hru011,
+  issaquah.hru021
+  #issaquah.hru251
+  ) %>%
+  pivot_longer(-c(grid,year, hru), names_to="Quant", values_to="discharge")%>%
+  merge(hruNames,by.x="hru",by.y = "name") %>% 
+  mutate( Quant_rc = car::Recode(Quant, " 'q_90' = '90% q'; 'q_95' = '95% q'; 'q_98' = '98% q'; 'q_99' = '99% q'; 'q_995' = '99.5% q'; 'q_999' = '99.9% q' "))
+
+ggplot((issaquah.quants.till),aes(x=year,y=discharge,color=Landuse))+geom_smooth(se=F)+ggtitle("Simulated Flow Percentiles, Issaquah, WA",subtitle = "Till Soil, Moderate Slope")+facet_wrap(~Quant_rc, scales = "free_y")
+
+
+```
+
+# example development
+```{r}
+options(scipen = 20)
+#0.0397 cfs (cubic feet per second)
+
+getFDCVals <- function(grid,year0,yearn) {
+  
+  sql_stmt <- paste0("
+  SELECT
+simulation_day, 
+(sum((hru101*16) *0.0397)+
+sum((hru121*14) *0.0397)+
+sum((hru251*10) *0.0397)) as current_cfs,
+(sum((hru101*40) *0.0397)) as forested_cfs,
+(sum((hru101*26) *0.0397)+
+sum((hru121*14) *0.0397)) as mitigated_cfs
+FROM
+  `tnc-data-v1.hydrology.gfdl_surfaceQ_grid`
+WHERE
+  grid = '",grid,"' and year between ",year0," and ", yearn," 
+  group by simulation_day
+")
+  
+  
+  billing <- "tnc-data-v1"
+  
+  tb <- bq_project_query(billing, sql_stmt)
+  
+  df.quants <- bq_table_download(tb, max_results = Inf)
+  return(df.quants)
+  
+}
+
+
+tacoma_historic = getFDCVals("ID15_V5",1970,1999)
+tacoma_future = getFDCVals("ID15_V5",2070,2099)
+library(hydroTSM)
+
+tacoma_future.dropped <- tacoma_future[-nrow(tacoma_future),]
+combined = data.frame(forested = tacoma_historic$forested_cfs, historic = tacoma_historic$current_cfs, future_mitigated = tacoma_future.dropped$mitigated_cfs, future_forest = tacoma_future.dropped$forested_cfs)
+
+fdcs <- (fdc(data.frame(forested = tacoma_historic$forested_cfs, devloped.current.P = tacoma_historic$current_cfs),ylab="Q (cfs)",sub="Tacoma, WA", ylim = c(0.1,100),verbose = F,plot=T,lQ.thr=0.6,hQ.thr=NA,thr.shw=T)) 
+
+fdcs <-
+  (
+    fdc(
+      data.frame(
+       
+        developed.current.P = tacoma_historic$current_cfs, 
+         "forested.or.mitigated" = tacoma_historic$forested_cfs,
+        forested.future.P = tacoma_future.dropped$forested_cfs,
+       mitigated.future.P = tacoma_future.dropped$mitigated_cfs
+      ),
+      ylab = "Q (cfs)",
+      sub = "Tacoma, WA",
+      ylim = c(0.1, 80),
+      xlim = c(0, 0.5),
+      verbose = F,
+      plot = T,
+      lQ.thr = 0.1,
+      hQ.thr = 0.5,
+      thr.shw = F, 
+      col = c("#e74c3c","#34495e","#2ecc71","#9b59b6"), 
+      pch = NA, #c("n","n","n","n")
+      lwd = c(1.2,0.8,0.8,0.8)
+      
+    )
+  ) 
+
+
+```
+
+# annual runoff all grids 
+```{r}
+sqlAll <- paste0("
+SELECT
+  SUM(mm_hr) as mm_hr, hru, grid, year, month
+FROM
+  `tnc-data-v1.hydrology.gfdl_longformat`
+WHERE
+  comp IN ('suro',
+    'ifwo')
+    and hru = 'hru250'
+GROUP BY
+  hru,
+  grid,
+  month,
+  year") 
+ billing <- "tnc-data-v1"
+  
+  tb <- bq_project_query(billing, sqlAll)
+  
+annualQ.all <- bq_table_download(tb, max_results = Inf)
+ggthemr("fresh")
+
+bigplot <- ggplot(annualQ.all)+
+  geom_point(aes(x=year,y=mm_hr,group=grid),size=0.5,color="light grey")+
+  geom_smooth(aes(x=year,y=mm_hr),se=F)
+
+bigplot+facet_wrap(~month,scales = "free_y")+ggtitle("Monthly Runoff")+ylab("mm/year")
+
+
+
+
+```
+
+
+
+
+```{r}
+singleYear <- function(yr){
+sql3 <- paste0("
+  SELECT
+  SUM(mm_hr) as mm_hr
+FROM
+  `tnc-data-v1.hydrology.gfdl_longformat`
+WHERE
+year = ", yr, " and 
+  comp IN ('suro',
+    'ifwo')
+    and grid = 'ID18_V8'
+GROUP BY
+  Datetime,
+  year"
+)
+ tb <- bq_project_query(billing, sql3)
+return(bq_table_download(tb, max_results = Inf)) }
+Q2019 <- singleYear(2019)
+Q2099 <- singleYear(2099)
+dataforplot <- data.frame(Q.2019 = Q2019, year = 2019)%>% add_row(
+  data.frame(Q.2099 = Q2099, year = 2099)
+)
+
+ggthemr("fresh","scientific")
+ggplot(dataforplot, aes(x = mm_hr,group=year)) + geom_line(stat = 'ecdf',aes(color=year)) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1),
+               limits = c(.50, 1)) + scale_x_continuous(limits = c(0.01, 5)) + annotation_logticks() +
+  xlab("Discharge mm/hr") + ylab("Flow exceedance in a given year")+ theme(legend.position = "none") 
+  
+```
+
+
+
+

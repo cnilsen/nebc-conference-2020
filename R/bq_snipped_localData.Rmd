@@ -1,0 +1,500 @@
+
+<!-- Citations
+Citation Syntax
+Citations go inside square brackets and are separated by semicolons. Each citation must have a key, composed of ‘@’ + the citation identifier from the database, and may optionally have a prefix, a locator, and a suffix. Here are some examples:
+
+Blah blah [see @doe99, pp. 33-35; also @smith04, ch. 1].
+
+Blah blah [@doe99, pp. 33-35, 38-39 and *passim*].
+
+Blah blah [@smith04; @doe99].
+A minus sign (-) before the @ will suppress mention of the author in the citation. This can be useful when the author is already mentioned in the text:
+
+Smith says blah [-@smith04].
+You can also write an in-text citation, as follows:
+
+@smith04 says blah.
+
+@smith04 [p. 33] says blah.
+ 
+-->
+# Setup 
+
+```{r knitrinit, echo=FALSE,  message=FALSE, warning=FALSE, cache=FALSE}
+library(knitr)
+library(ggthemr)
+library(rmdformats)
+library(hrbrthemes)
+library(tidyverse)
+library(showtext)
+library(kableExtra)
+library(transformr)
+library(gganimate)
+font_add("Roboto Condensed","robotocondensed-regular.ttf")
+
+
+### Global options
+
+#options(warning = FALSE,message = FALSE,echo=FALSE)
+opts_chunk$set(echo=FALSE,
+               message=FALSE,
+                warning=FALSE,cache=TRUE)
+#opts_knit$set(warning = FALSE,message = FALSE,echo=FALSE)
+
+## ggploting theme
+#theme_set(hrbrthemes::theme_ipsum_rc())
+#hrbrthemes::import_roboto_condensed()
+#hrbrthemes::update_geom_font_defaults()
+```
+
+## Verification of Results 
+
+Results were verified by comparing simulations to measured streamflow for a gaged watershed in King County. King County operates a stream gage on Madsen Creek, near Renton. The watershed above the gage site is approximately 2,000 acres, with about 25% imperviousness. 
+
+Daily streamflow data for the Madsen Creek watershed was provided by King County^[https://green2.kingcounty.gov/hydrology/SummaryDataGraphs.aspx?G_ID=98] for the period 1991-2010. We delineated the watershed above the gaging site using the USGS NHDPLus flow-conditioned raster [@moore2019user]. 
+Using this watershed boundary, we extracted HRUs and associated areas from the stormwater heatmap HRU layer on Google Earth Engine. HRU results and areas are shown in Table \@ref(tab:madsent).
+
+```{r madsent}
+
+madsen <- read_csv("data/madsen.csv", col_types = cols(hruName_1 = col_skip(), 
+    X8 = col_skip(), X9 = col_skip(), X10 = col_skip(), 
+    X11 = col_skip()))
+kable(madsen,caption = "Summary of HRUs and areas in Madsen Creek Watershed")
+```
+
+Modeling results were then queried and aggregated from the BigQuery dataset as described in Appendix B. The same HRU values were also run in WWHM for comparison. Both the WWHM and BigQuery results were truncated to have the same period of record as the streamflow data. Only the surface runoff and interflow components were used in this analysis. 
+
+Figure \@ref(fig:madsenFig) shows a comparison of the observed and simulation flow-durations for the Madsen Creek watershed.
+
+```{r madsenFig, fig.cap = "Observed and simulated flow-duration curves for Madsen Creek, King County, WA"}
+#madsen creek 
+
+kc_daily <- read_csv("~/repos/stormwaterheatmap-master/hydrology/data/Hydrology_PUQEW.csv", 
+    col_types = cols(`Collect Date (local)` = col_date(format = "%m/%d/%Y")))
+
+
+madsen_creek_daily_BQ <- read_csv("~/repos/stormwaterheatmap-master/hydrology/data/madsen_creek_daily_BQ2.csv", 
+    col_types = cols(Date = col_date(format = "%m/%d/%Y")))
+
+#sum components of bq data 
+
+BQ_daily <- madsen_creek_daily_BQ# aggregate(cfs ~ Date,madsen_creek_daily_BQ,sum )
+BQ_daily$cfs <- BQ_daily$Q*4.08734569e-7#convert to cfs
+
+#ggplot(madsen_creek_daily_BQ)+geom_line(aes(x=Date,y=cfs),color="red",alpha=0.5)+geom_line(data = kc_daily,
+ #                                                                    aes(x=`Collect Date (local)`, y = `Discharge (cfs)`),color="blue")
+
+library(hydroTSM)
+
+
+madsen_wwhm_daily <- read.csv("~/repos/stormwaterheatmap-master/hydrology/data/madsen_wwhm_daily2.txt", sep="", stringsAsFactors=FALSE)
+madsen_wwhm_daily$date_formatted <- (gsub(",","",madsen_wwhm_daily$Date))%>%
+  parse_date(format = "%Y/%m/%d")
+#get common dates 
+#
+#result <- merge(dates, test, by.y = "date", by.x = "date", all.x = TRUE)
+allQs <- BQ_daily %>% #merge(kc_daily,BQ_daily,by.x = "Collect Date (local)",by.y = "date",all.x = TRUE) %>%
+  merge(madsen_wwhm_daily,by.x = "date",by.y = "date_formatted",all.x = TRUE)%>%
+  dplyr::select(c(wwhm=X801.cfs,PyHSPF=cfs))
+
+fcdVals <- fdc(allQs, ylim = c(1,30),xlim=c(0.005,0.3),log="x",lQ.thr = 0.5,main = "Modeled Flow Duration Curve- King County Verification Watershed", ylab="Q, (cfs)",yat=c(2,5,10),thr.shw=FALSE)
+
+```
+
+Both the WWHM and PyHSPF results underpredict actual streamflow primarly because baseflow was not simulated. This is expected, since both models exclude groundwater contributions. However, the results show good agreement between both simulated datasets over the full duration of simulations. Note that the simulations use different precipitation (see Figure \@ref(fig:precipCompare) ) datasets and are not expected to match. 
+```{r precipCompare, fig.cap=, fig.height=5.57, fig.width=8.55}
+library(ggthemr)
+ggthemr("pale","clean")
+newSwatch <- swatch()[3:4]
+precipCompare = function(wwhm_subset, Cig_precip) {
+  
+  
+  Cig_precip$year <- wwhm_subset$year
+  
+  df.melt <-
+    wwhm_subset %>% group_by(year)  %>% mutate(cumsum = cumsum(mm))
+  df.meltBQ <-
+    Cig_precip %>% group_by(year)  %>%  mutate(cumsum = cumsum(x))
+  
+  wwhmPlot <-
+    ggplot(df.melt) + geom_line(lty = 1, size = 0.7, aes(
+      x = seq(1, 6940, 1),
+      y = cumsum,
+      color = "wwhm"
+    )) + geom_line(data = df.meltBQ, lty = 1,size = 0.7,  aes(
+      x = seq(1, 6940, 1),
+      y = cumsum,
+      color = "CIG"
+    )) + facet_wrap(~year, ncol = 5, scales = c("free_x"))
+  
+  wwhmPlot + #theme_minimal() + 
+    theme(axis.title.x = element_blank(), axis.text.x =
+                                       element_blank())+ylab("Cummulative Precipitation (mm)")+
+    scale_color_manual(values = rev(newSwatch))
+}
+seatac <- read.delim("data/seatac_daily_precip.txt", stringsAsFactors=FALSE)
+
+seatac$year <- strtrim(seatac$Date, 4)
+start = 15433
+seatac_subset <- seatac[start:(start + 6939),]
+seatac_subset$mm <- seatac_subset$X2.in * 25.4
+Cig_renton_Precip <- read_csv("data/ID17_V7_precip_1991_2010.csv")
+Cig_renton_Precip$year <- seatac_subset$year
+precipCompare(seatac_subset,Cig_renton_Precip)+
+  labs(title = "Precipitation datasets used for verification",
+              caption = "WWHM = Seatac precipitation gage from WWHM \n CIG = Gridded precipitation used in this study")
+
+
+```
+
+## Spatially Aggregated Results     
+Since the PyHSPF model is a lumped parameter model, results can be calculated for HRU/precipitation grids individually and then aggregated after calculation. 
+
+The stormwater heatmap contains two spatial aggregates of hydrology results: Mean Annual Runoff for the historic period (1970-1999) and a new index, termed the Flow Duration Index. 
+
+
+
+### Mean Annual Runoff (1970-1999)
+
+Mean annual runoff for each HRU/grid combination was aggregated from BigQuery for the historic period of record (1970-1999). Consistent with Ecology guidance for stormwater projects, only the surface flow components, `SURO` and `IFWO` were used. `AGWO`, deep groundwater flow, was not included in this calculation. 
+
+Total runoff was calculated for each year/hru/grid combination in the period of record, then averaged by hru/grid combination. 
+
+# run BQ for all years/months
+```{r meanannualQ, message=FALSE, warning=FALSE, cache=TRUE, include=FALSE}
+df_1 <- readRDS("~/repos/nebc/df_1.rds")
+
+```
+
+#pivot Data 
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+library(ggridges)
+hruNames <- read_csv("data/hrus.csv", 
+    col_names = TRUE)
+
+
+Q_all_years <-  df_1 %>%
+  dplyr::select(-c(hru250,hru252))  %>%
+  pivot_longer(-c(grid,month,begyr,endyr), names_to="hru", values_to="MeanQ")%>%
+  merge(hruNames,by.x="hru",by.y = "name") 
+
+Q_all_years <- Q_all_years %>% 
+  add_column(Q.inches = Q_all_years$MeanQ/25.4 )
+
+  
+#group by year 
+#
+AnnualQ <- Q_all_years %>% group_by(hru, grid, begyr, endyr, Soil, Landuse, Slope)  %>% summarize(Annual.Q.inches = sum(Q.inches))
+
+
+
+
+```
+```{r}
+plot <- ggplot(subset(AnnualQ, Landuse %in% c("Forest", "Lawn", "Pasture")),
+               aes(
+                 y = Landuse, 
+                 x = 'MeanQ',
+                 fill = Soil
+               )
+               ) + 
+  ylab("Mean Annual Runoff (mm/year) 1970-1999")
+
+
+```
+<!-- Citations
+Figures \@ref(fig:outwash_fig2) through xx show box plots of mean annual runoff results for the historic period of record for each modeled soil type.
+<!\@ref(fig:wrfGrid).-->
+
+
+```{r annualQplots, fig.height=8}
+
+# plot+geom_density_ridges()
+# plot+facet_wrap(~Soil)+geom_density_ridges()#+theme(legend.position = "none")#+ggtitle("Boxplots of Mean Annual Runoff Modeling Results")
+
+```
+     
+### Flow Duration Index   
+
+#### Ecology Performance Standards 
+Ecology Stormwater Guidance includes flow-related performance standards to protect receiving waters from degradation caused by changes in the hydrologic regime due to development.  These performance standards rely on flow-duration matching, whereby flow durations from developed land are required to match pre-developed flow-durations for a range of discharge values.The flow duration standard is intended to prevent flashy flows in receiving stream channels. 
+
+#### Calculation of the Index
+We developed an index representing the magnitude of change to the flow-duration curve between flow thresholds.Thresholds were chosen based on Ecology's LID and Flow Control Standards  [@DepartmentofEcology2014], which require flow-duration matching over the range between 8 percent of the 2-year peak discharge (lower threshold of the LID standard) up to the 50-year peak discharge (upper threshold of the flow-control standard).   
+
+
+
+```{r}
+ggthemr('fresh','plain')
+devtools::install_github('thomasp85/transformr')
+library(transformr)
+```
+
+
+#plots for all years 
+```{r}
+plt.a <- ggplot(AnnualQ) #subset(Q, Landuse %in% c("Forest", "Lawn", "Pasture")))
+
+plt.b <- plt.a + geom_density(alpha = 0.8, #binwidth = 2, 
+  aes(x=Annual.Q.inches,fill=Landuse),color="white")+
+  facet_grid(Landuse~.,scales="free")
+  # labs(x="Flow Index", y="Land Cover",
+  #      title="Histogram of Flow Duration Index - All Puget Sound Locations",
+  #      subtitle="1970-1999 Modeling Results")+
+plt.b
+  
+animatedPlot <- plt.b+  labs(title = 'Range: {frame_time} - {frame_time+29}')+transition_time(begyr) 
+animate(animatedPlot, #duration = 5, fps = 20, width = 200, height = 200, 
+        renderer = gifski_renderer())
+anim_save("output.gif")
+
+```
+
+
+```{r}
+ggthemr('fresh','plain')
+plt.c <- plt.a + geom_histogram(alpha = 0.8, binwidth = 2, 
+  aes(x=Annual.Q.inches,fill=Soil))+
+  facet_grid(Landuse~.,scales="free")
+  # labs(x="Flow Index", y="Land Cover",
+  #      title="Histogram of Flow Duration Index - All Puget Sound Locations",
+  #      subtitle="1970-1999 Modeling Results")+
+plt.c
+
+```
+
+
+#Plot for Seattle
+```{r}
+plt.d <-ggplot(AnnualQ %>% 
+                 filter(grid == "ID16_V9")) 
+plt.d + geom_line(aes(x=endyr, y = Annual.Q.inches,color=Soil))+
+  facet_grid(Landuse~.,scales="free")
+  # labs(x="Flow Index", y="Land Cover",
+  #      title="Histogram of Flow Duration Index - All Puget Sound Locations",
+  #      subtitle="1970-1999 Modeling Results")+
+
+
+```
+
+#plots for december 
+
+### Pivot 
+
+
+```{r}
+Dec.Q <- Q_all_years %>% 
+  filter(month == 12)  %>% 
+  group_by(hru, grid, begyr, endyr, Soil, Landuse, Slope)  %>% summarize(Q.inches = sum(Q.inches)) 
+
+
+
+```
+
+
+```{r}
+
+
+plt.d <-ggplot(Dec.Q %>% 
+                 filter(grid == "ID16_V9")) 
+plt.d + geom_line(aes(x=endyr, y = Q.inches,color=Soil))+
+  facet_grid(Landuse~.,scales="free")+scale_y_log10()
+
+```
+
+
+```{r}
+plt.a.dec <- ggplot(Dec.Q) #subset(Q, Landuse %in% c("Forest", "Lawn", "Pasture")))
+
+plt.b.dec <- plt.a.dec + geom_histogram(alpha = 0.8, binwidth = 0.5, 
+  aes(x=Q.inches,fill=Soil),color="white")+
+  facet_grid(Landuse~.,scales="free")
+
+plt.b.dec
+
+
+
+```
+
+
+```{r}
+
+animatedPlot <- plt.b.dec+  labs(title = 'Range: {frame_time} - {frame_time+29}')+transition_time(begyr) 
+animate(animatedPlot, #duration = 5, fps = 20, width = 200, height = 200, 
+        renderer = gifski_renderer())
+anim_save("output.gif")
+
+```
+
+
+The flow duration index can be described by Equation \@ref(eq:fdr). 
+
+$$
+  \ln\left(\frac{\sum_{ }^{ }q_{current}\Delta t}{\sum_{ }^{ }q_{forest}\Delta t}+1\right) \\
+  \text{for: }\left\{ \ 0.06\cdot Q_{2,forest\ }\le\ q\ \le\ Q_{50,forest}\right\}   
+  (\#eq:fdr)
+$$
+
+Where q~current~ is the simulated discharge for current or altered conditions and q~forest~ is the predevelopment or forested conditions. One is added to this ratio and the logarithm is taken to produce an index that generally falls between 1 and 10. This index is then applied to hru/grid combinations in the stormwater heatmap to produce a spatially explicit mapping of flow alteration. Figure  \@ref(fig:flowIndexfig) shows a summary of flow index values used in the stormwater heatmap.     
+
+
+```{r flowIndexfig, fig.cap="Summary of flow index values in study area"}
+```
+
+
+```{r flowIndexfig, fig.cap="Summary of flow index values in study area"}
+df.flowIndex <- read_csv("data/flow_index_out.csv")
+ggplot(subset(df.flowIndex, df.flowIndex$landcover != "forest"))+
+
+geom_histogram(binwidth = 0.05, aes(x=flowRegimeIndexLog,fill=soil))+facet_grid(landcover~.,scales="free_y")+
+  labs(x="Flow Index", y="Land Cover",
+       title="Histogram of Flow Duration Index - All Puget Sound Locations",
+       subtitle="1970-1999 Modeling Results")+scale_color_ipsum()+scale_fill_ipsum()+ylab("Count of Grids")+scale_x_continuous(breaks=scales::pretty_breaks(n=10))
+```
+
+
+```{r flowIndexfig, fig.cap="Summary of flow index values in study area"}
+```
+
+
+
+
+# Subset Grids 
+
+## Seattle 
+```{r}
+
+ggthemr("fresh")
+
+df_1 <- readRDS("~/repos/nebc/df_1.rds")
+
+hruNames <- read_csv("hrus.csv", 
+    col_names = TRUE)
+Q_all_years <-  df_1 %>%
+  dplyr::select(-c(hru250,hru252))  %>%
+  pivot_longer(-c(grid,month,begyr,endyr), names_to="hru", values_to="MeanQ")%>%
+  merge(hruNames,by.x="hru",by.y = "name") 
+
+Q_all_years <- Q_all_years %>% 
+  add_column(Q.inches = Q_all_years$MeanQ/25.4 )
+
+  
+#group by year 
+#
+AnnualQ <- Q_all_years %>% group_by(hru, grid, begyr, endyr, month, Soil, Landuse, Slope)  %>% summarize(Annual.Q.inches = sum(Q.inches))
+
+monthMax <-  Q_all_years %>% group_by(hru, grid, begyr, endyr, month, Soil, Landuse, Slope)  %>% summarize(Annual.Q.inches = max(Q.inches))
+
+ cityGrid <- function(fname, df) {
+   cityGrids <- read_csv(fname)
+  cityGrids$grid <- paste0("ID", cityGrids$id)
+  return(df[which(df$grid %in% cityGrids$grid),])
+ 
+ }
+ 
+ allUrban <- cityGrid("grids_with_cityName.csv", AnnualQ)
+ allUrban.monthMax <- cityGrid("grids_with_cityName.csv", monthMax)
+ 
+
+
+plotHistogram <- function(df) {
+  plt.a <- ggplot(df,aes(group=grid)) #subset(Q, Landuse %in% c("Forest", "Lawn", "Pasture")))
+  
+  plt.b <- plt.a + geom_histogram(alpha = 0.8, #binwidth = 2, 
+    aes(x=Annual.Q.inches,fill=Soil),color="white")+
+    facet_grid(Landuse~.,scales="free")
+    # labs(x="Flow Index", y="Land Cover",
+    #      title="Histogram of Flow Duration Index - All Puget Sound Locations",
+    #      subtitle="1970-1999 Modeling Results")+
+    return(plt.b)
+}
+
+till_only <- dplyr::filter(allUrban.monthMax, Soil %in% c("Till","Impervious") )
+
+hist.plot <- ggplot(till_only, aes(x=Annual.Q.inches,fill=Landuse))+geom_histogram()+facet_wrap(~Landuse, scales = "free_y")
+```
+
+# Subset by year...
+
+```{r}
+
+hist <- filter(till_only,  between(begyr, 1970, 1999) )
+future <- filter(till_only,  between(begyr, 2070, 2099) )
+p1 <- ggplot(hist)+geom_density(aes(x=Annual.Q.inches,fill=Landuse))+facet_wrap(~Landuse, scales = "free_y")+scale_y_sqrt()
+
+p1  +geom_density(data = future, aes(x=Annual.Q.inches,fill=Landuse),alpha=0.7)
+
+```
+
+```{r}
+animatePl <- function(p) {
+  animatedPlot <- p+  labs(title = 'Range: {frame_time} - {frame_time+29}')+transition_time(begyr) 
+  animate(animatedPlot, #duration = 5, fps = 20, width = 200, height = 200, 
+          renderer = gifski_renderer())
+}
+
+animatePl(hist.plot)
+anim_save("output.gif")
+
+
+
+
+```
+
+
+# All cities
+```{r}
+#import grids with city names 
+#
+
+#grids_with_cityName <- read_csv("grids_with_cityName.csv")
+# get just the unique grids 
+# 
+# 
+#grids_with_cityName$grid <- paste0("ID",(grids_with_cityName$id))%>%
+  
+res_subset <-    AnnualQ[which(AnnualQ$grid %in% unique(grids_with_cityName$grid)),]
+plotHistogram(filter(res_subset, grid != "ID10_V13"))
+```
+
+
+```{r}
+
+queryQuants <- function(grid,hru) {
+  
+  sql_stmt <- paste0("
+  select
+      year, ",hru," as hru, q10, q25, q50, q75, q90, q95, q98, q99
+  FROM (
+    SELECT
+      grid, year,
+    PERCENTILE_DISC(",hru,",
+        0.50) OVER (PARTITION BY grid, year) AS q50,
+        PERCENTILE_DISC(",hru,",
+        0.75) OVER (PARTITION BY grid, year) AS q75,
+        PERCENTILE_DISC(",hru,",
+        0.90) OVER (PARTITION BY grid, year) AS q90,
+        PERCENTILE_DISC(",hru,",
+        0.95) OVER (PARTITION BY grid, year) AS q95,
+        PERCENTILE_DISC(",hru,",
+        0.98) OVER (PARTITION BY grid, year) AS q98,
+      PERCENTILE_DISC(",hru,",
+        0.99) OVER (PARTITION BY grid, year) AS q99
+    FROM
+      hydrology.gfdl_surfaceQ)
+  where grid = '",grid,"' 
+  GROUP BY
+    grid, year,  q50, q75, q90, q95, q98, q99")
+  
+  
+  billing <- "tnc-data-v1"
+  
+  tb <- bq_project_query(billing, sql_stmt)
+  
+  df.quants <- bq_table_download(tb, max_results = Inf)
+  return(df.quants)
+  
+}
+
+
