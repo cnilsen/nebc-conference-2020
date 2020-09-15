@@ -1,6 +1,5 @@
 # nebc-conference-2020
-Slides and code from the NEBC Managing Stormwater in Washington Conference
-
+Slides and code from the NEBC [Managing Stormwater in Washington Conference](https://washingtonstormwater.com/) 
 ## Session Information 
 
 ### Climate Change and Stormwater
